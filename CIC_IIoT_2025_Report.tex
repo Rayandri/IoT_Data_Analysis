@@ -1,0 +1,724 @@
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage{enumitem}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{CIC-IIoT-2025 Security Analysis}
+\lhead{ML Security}
+\rfoot{Page \thepage}
+
+% Hyperref settings
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+}
+
+% Title
+\title{
+    \vspace{-1cm}
+    \textbf{CIC-IIoT-2025 Cybersecurity Analysis Report}\par\vspace{0.5cm}
+    \large Machine Learning for Intrusion Detection in Industrial IoT Networks
+}
+\author{
+    Alexis Le Trung\\
+    Yahya Ahachim\\
+    Rayan Drissi\\
+    Aniss Outaleb\\
+    \small ML Security -- EPITA SCIA 2026
+}
+\date{January 2025}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report presents a machine learning-based analysis of the CIC-IIoT-2025 dataset for network intrusion detection in Industrial Internet of Things environments. The study evaluates three unsupervised anomaly detection algorithms and three supervised classification methods, benchmarking their performance using precision, recall, F1-score, AUPRC, balanced accuracy, and Matthews Correlation Coefficient. Additionally, the robustness of models against adversarial perturbations is assessed using the Fast Gradient Sign Method. Results indicate that Local Outlier Factor achieves the best anomaly detection performance (F1=0.843), Gradient Boosting provides the highest classification accuracy (F1=0.925), and Random Forest demonstrates superior adversarial robustness (60.1\% robust accuracy retention).
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Introduction}
+%==============================================================================
+
+\subsection{Background}
+
+The proliferation of Industrial Internet of Things (IIoT) devices has created significant security challenges for critical infrastructure systems. Manufacturing plants, power grids, healthcare facilities, and transportation networks increasingly rely on connected devices, making them attractive targets for cyber attacks. Traditional signature-based intrusion detection systems struggle to detect novel attack patterns, creating a need for machine learning approaches capable of identifying anomalous behavior and classifying known attack types.
+
+The CIC-IIoT-2025 dataset provides a comprehensive collection of network traffic data captured from an IIoT testbed, including realistic attack scenarios representing modern cyber threats. This report analyzes this dataset using both unsupervised and supervised machine learning methods to develop effective intrusion detection capabilities.
+
+\subsection{Objectives}
+
+This study aims to:
+\begin{enumerate}
+    \item Characterize the CIC-IIoT-2025 dataset and identify discriminative features
+    \item Benchmark unsupervised anomaly detection methods (Isolation Forest, One-Class SVM, Local Outlier Factor)
+    \item Evaluate supervised classification algorithms (Random Forest, Gradient Boosting, SVM)
+    \item Assess model robustness against adversarial attacks using FGSM
+    \item Provide recommendations for deploying machine learning-based intrusion detection
+\end{enumerate}
+
+\subsection{Methodology}
+
+The analysis follows a systematic approach: data exploration and feature engineering, stratified train/test splitting, hyperparameter tuning via cross-validation, model evaluation using multiple complementary metrics, and adversarial robustness testing using gradient-based attacks.
+
+%==============================================================================
+\section{Dataset Description}
+%==============================================================================
+
+\subsection{Dataset Overview}
+
+The CIC-IIoT-2025 dataset contains network traffic data captured from an Industrial IoT testbed environment. Table~\ref{tab:dataset_overview} summarizes the dataset characteristics.
+
+\begin{table}[H]
+\centering
+\caption{Dataset Overview}
+\label{tab:dataset_overview}
+\begin{tabular}{lr}
+\toprule
+\textbf{Attribute} & \textbf{Value} \\
+\midrule
+Total Samples & 227,191 \\
+Total Features & 94 \\
+Attack Samples & 90,391 (39.79\%) \\
+Benign Samples & 136,800 (60.21\%) \\
+Attack Categories & 7 \\
+Specific Attack Types & 60 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Attack Categories}
+
+The dataset includes seven major attack categories representing diverse threat vectors commonly observed in IIoT environments. Table~\ref{tab:attack_distribution} presents the distribution of attack types.
+
+\begin{table}[H]
+\centering
+\caption{Attack Category Distribution}
+\label{tab:attack_distribution}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Attack Category} & \textbf{Samples} & \textbf{Percentage} \\
+\midrule
+Reconnaissance & 33,648 & 37.23\% \\
+DoS & 18,420 & 20.38\% \\
+DDoS & 18,056 & 19.98\% \\
+Man-in-the-Middle & 8,062 & 8.92\% \\
+Malware & 7,541 & 8.34\% \\
+Web Attacks & 2,796 & 3.09\% \\
+Brute Force & 1,868 & 2.07\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/class_distribution.png}
+\caption{Distribution of attack types in the CIC-IIoT-2025 dataset}
+\label{fig:class_distribution}
+\end{figure}
+
+\subsection{Feature Categories}
+
+The 94 features are organized into several categories:
+\begin{itemize}
+    \item \textbf{Network Metrics:} Packet counts, byte counts, flow duration
+    \item \textbf{TCP Flags:} SYN, ACK, FIN, RST, PSH, URG statistics
+    \item \textbf{Protocol Information:} Protocol type distributions
+    \item \textbf{Header Information:} IP/TCP header lengths, MSS values
+    \item \textbf{Timing Features:} Inter-arrival times, flow duration
+\end{itemize}
+
+%==============================================================================
+\section{Data Exploration and Preprocessing}
+%==============================================================================
+
+\subsection{Feature Correlation Analysis}
+
+Analysis of feature correlations with the attack label revealed the most discriminative features. Table~\ref{tab:top_features} presents the top features ranked by correlation coefficient.
+
+\begin{table}[H]
+\centering
+\caption{Top Features by Correlation with Attack Label}
+\label{tab:top_features}
+\begin{tabular}{lr}
+\toprule
+\textbf{Feature} & \textbf{Correlation} \\
+\midrule
+network\_mss\_max & 0.5256 \\
+network\_mss\_avg & 0.5251 \\
+network\_mss\_min & 0.5232 \\
+network\_header-length\_min & 0.4635 \\
+network\_protocols\_dst\_count & 0.4232 \\
+network\_packets\_all\_count & 0.3666 \\
+network\_protocols\_src\_count & 0.3632 \\
+network\_macs\_all\_count & 0.3619 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+TCP Maximum Segment Size (MSS) values and protocol diversity metrics emerge as the most discriminative features, suggesting that attack traffic exhibits distinct network-level characteristics compared to benign traffic.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{figures/correlation_heatmap.png}
+\caption{Feature correlation heatmap showing relationships between top features}
+\label{fig:correlation_heatmap}
+\end{figure}
+
+\subsection{Feature Distribution Analysis}
+
+Figure~\ref{fig:feature_distributions} illustrates the distribution of key features across benign and attack traffic classes. Notable differences in distribution patterns provide the basis for machine learning classification.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/feature_distributions.png}
+\caption{Distribution of key features across benign and attack traffic}
+\label{fig:feature_distributions}
+\end{figure}
+
+\subsection{Data Preprocessing}
+
+The following preprocessing steps were applied:
+\begin{enumerate}
+    \item \textbf{Missing Value Handling:} NaN and infinite values replaced with column medians
+    \item \textbf{Feature Scaling:} StandardScaler normalization for consistent feature ranges
+    \item \textbf{Label Encoding:} Binary encoding (0=Benign, 1=Attack) for the target variable
+    \item \textbf{Train/Test Split:} 80/20 stratified split preserving class distribution
+\end{enumerate}
+
+Final dataset sizes: Training set with 181,752 samples (39.79\% attacks) and test set with 45,439 samples (39.79\% attacks).
+
+%==============================================================================
+\section{Anomaly Detection Methods}
+%==============================================================================
+
+Anomaly detection methods are essential for detecting zero-day attacks and novel threat patterns that supervised classifiers may miss. Three unsupervised algorithms were evaluated, each trained exclusively on benign traffic.
+
+\subsection{Isolation Forest}
+
+Isolation Forest isolates anomalies by randomly selecting features and split values. Anomalies, being few and different from normal instances, are isolated in fewer splits, resulting in shorter average path lengths in the tree structure.
+
+\textbf{Configuration:} 100 estimators, contamination=0.1, max\_samples='auto', random\_state=42.
+
+\begin{table}[H]
+\centering
+\caption{Isolation Forest Results}
+\label{tab:iforest_results}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Precision & 0.8830 \\
+Recall & 0.7758 \\
+F1-Score & 0.8259 \\
+Balanced Accuracy & 0.8365 \\
+MCC & 0.6780 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{One-Class SVM}
+
+One-Class SVM learns a decision boundary encompassing the normal data distribution. Points outside this boundary are classified as anomalies.
+
+\textbf{Configuration:} RBF kernel, nu=0.1, gamma='auto'.
+
+\begin{table}[H]
+\centering
+\caption{One-Class SVM Results}
+\label{tab:ocsvm_results}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Precision & 0.5847 \\
+Recall & 0.8476 \\
+F1-Score & 0.6920 \\
+Balanced Accuracy & 0.6228 \\
+MCC & 0.2750 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+One-Class SVM exhibits high recall but low precision, indicating excessive false positives where benign traffic is incorrectly classified as attacks.
+
+\subsection{Local Outlier Factor}
+
+Local Outlier Factor (LOF) measures the local density deviation of a data point with respect to its neighbors. Points with significantly lower density than their neighbors are considered outliers.
+
+\textbf{Configuration:} n\_neighbors=20, novelty=True, contamination=0.1.
+
+\begin{table}[H]
+\centering
+\caption{Local Outlier Factor Results}
+\label{tab:lof_results}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Precision & 0.8870 \\
+Recall & 0.8034 \\
+F1-Score & 0.8431 \\
+Balanced Accuracy & 0.8505 \\
+MCC & 0.7041 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Anomaly Detection Comparison}
+
+\begin{table}[H]
+\centering
+\caption{Anomaly Detection Methods Comparison}
+\label{tab:anomaly_comparison}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Bal. Acc.} & \textbf{MCC} \\
+\midrule
+Isolation Forest & 0.8830 & 0.7758 & 0.8259 & 0.8365 & 0.6780 \\
+One-Class SVM & 0.5847 & 0.8476 & 0.6920 & 0.6228 & 0.2750 \\
+\textbf{Local Outlier Factor} & \textbf{0.8870} & \textbf{0.8034} & \textbf{0.8431} & \textbf{0.8505} & \textbf{0.7041} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/anomaly_detection_comparison.png}
+\caption{Comparison of anomaly detection methods across all metrics}
+\label{fig:anomaly_comparison}
+\end{figure}
+
+Local Outlier Factor achieves the best overall performance with the highest F1-score (0.8431) and MCC (0.7041). Isolation Forest provides a strong balance of precision and computational efficiency. One-Class SVM, while achieving high recall, produces too many false positives for practical deployment.
+
+%==============================================================================
+\section{Classification Methods}
+%==============================================================================
+
+Supervised classification methods leverage labeled training data to learn decision boundaries between attack and benign traffic. Three algorithms were evaluated on the full labeled dataset.
+
+\subsection{Random Forest}
+
+Random Forest is an ensemble method that constructs multiple decision trees and aggregates their predictions through majority voting. It provides inherent feature importance ranking and resistance to overfitting.
+
+\textbf{Configuration:} 100 estimators, unlimited depth, min\_samples\_split=2, balanced class weights, random\_state=42.
+
+\begin{table}[H]
+\centering
+\caption{Random Forest Results}
+\label{tab:rf_results}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Precision & 0.9915 \\
+Recall & 0.8627 \\
+F1-Score & 0.9226 \\
+Balanced Accuracy & 0.9289 \\
+MCC & 0.8825 \\
+AUPRC & 0.9438 \\
+AUC-ROC & 0.9582 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/feature_importance_rf.png}
+\caption{Top 20 most important features from Random Forest}
+\label{fig:feature_importance}
+\end{figure}
+
+\subsection{Gradient Boosting}
+
+Gradient Boosting builds trees sequentially, with each tree correcting the errors of the previous ensemble. It typically achieves high accuracy through its iterative refinement process.
+
+\textbf{Configuration:} 100 estimators, learning\_rate=0.1, max\_depth=5, subsample=0.8, random\_state=42.
+
+\begin{table}[H]
+\centering
+\caption{Gradient Boosting Results}
+\label{tab:gb_results}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Precision & 0.9911 \\
+Recall & 0.8663 \\
+F1-Score & 0.9245 \\
+Balanced Accuracy & 0.9306 \\
+MCC & 0.8851 \\
+AUPRC & 0.9436 \\
+AUC-ROC & 0.9587 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Support Vector Machine (RBF Kernel)}
+
+Support Vector Machine with RBF kernel maps data to a higher-dimensional space where a linear separator can be found. Due to computational constraints, SVM was trained on a 10,000-sample subset.
+
+\textbf{Configuration:} RBF kernel, C=1.0, gamma='scale', balanced class weights.
+
+\begin{table}[H]
+\centering
+\caption{SVM (RBF Kernel) Results}
+\label{tab:svm_results}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Precision & 0.9629 \\
+Recall & 0.7970 \\
+F1-Score & 0.8721 \\
+Balanced Accuracy & 0.8881 \\
+MCC & 0.8074 \\
+AUPRC & 0.9238 \\
+AUC-ROC & 0.9325 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Classification Comparison}
+
+\begin{table}[H]
+\centering
+\caption{Classification Methods Comparison}
+\label{tab:classification_comparison}
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Model} & \textbf{Prec.} & \textbf{Recall} & \textbf{F1} & \textbf{Bal. Acc.} & \textbf{MCC} & \textbf{AUPRC} & \textbf{AUC} \\
+\midrule
+Random Forest & 0.9915 & 0.8627 & 0.9226 & 0.9289 & 0.8825 & 0.9438 & 0.9582 \\
+\textbf{Gradient Boosting} & \textbf{0.9911} & \textbf{0.8663} & \textbf{0.9245} & \textbf{0.9306} & \textbf{0.8851} & 0.9436 & \textbf{0.9587} \\
+SVM (RBF) & 0.9629 & 0.7970 & 0.8721 & 0.8881 & 0.8074 & 0.9238 & 0.9325 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/classification_comparison.png}
+\caption{Comparison of classification methods across all metrics}
+\label{fig:classification_comparison}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/precision_recall_curves.png}
+\caption{Precision-recall curves for all classification methods}
+\label{fig:pr_curves}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/confusion_matrices.png}
+\caption{Confusion matrices for all classification methods}
+\label{fig:confusion_matrices}
+\end{figure}
+
+Gradient Boosting achieves the best overall performance across most metrics. Random Forest performs comparably while offering better interpretability through feature importance. All methods achieve precision above 96\%, minimizing false alarms in operational deployment.
+
+%==============================================================================
+\section{Adversarial Machine Learning}
+%==============================================================================
+
+\subsection{Background}
+
+Machine learning models for cybersecurity can be vulnerable to adversarial attacks where malicious actors craft inputs designed to evade detection. Understanding model robustness is critical for deployment in security-sensitive applications. This section evaluates model vulnerability using the Fast Gradient Sign Method (FGSM).
+
+\subsection{FGSM Attack Implementation}
+
+The Fast Gradient Sign Method is a white-box attack that uses the gradient of the loss function to create perturbations maximizing classification error. The adversarial example is computed as:
+
+\begin{equation}
+x_{adv} = x + \epsilon \cdot \text{sign}(\nabla_x J(\theta, x, y))
+\end{equation}
+
+where $x_{adv}$ is the adversarial example, $x$ is the original input, $\epsilon$ is the perturbation magnitude, and $J$ is the loss function with model parameters $\theta$.
+
+\subsection{Attack Results}
+
+Table~\ref{tab:fgsm_results} presents the impact of FGSM attacks on a Linear SVM classifier across different perturbation magnitudes.
+
+\begin{table}[H]
+\centering
+\caption{FGSM Attack Results on Linear SVM}
+\label{tab:fgsm_results}
+\begin{tabular}{ccc}
+\toprule
+\textbf{Epsilon} & \textbf{Astute Accuracy} & \textbf{Attack Success Rate} \\
+\midrule
+0.01 & 86.72\% & 13.28\% \\
+0.05 & 25.96\% & 74.04\% \\
+0.10 & 15.95\% & 84.05\% \\
+0.20 & 9.29\% & 90.71\% \\
+0.50 & 3.47\% & 96.53\% \\
+1.00 & 0.97\% & 99.03\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/fgsm_attack_analysis.png}
+\caption{Impact of FGSM attack strength (epsilon) on model accuracy}
+\label{fig:fgsm_analysis}
+\end{figure}
+
+\subsection{Model Robustness Comparison}
+
+All models were tested against FGSM attacks with $\epsilon=0.5$ to compare their adversarial robustness. The robust accuracy represents the model's accuracy on adversarial examples, while astute accuracy refers to the original accuracy on clean data.
+
+\begin{table}[H]
+\centering
+\caption{Adversarial Robustness Comparison ($\epsilon=0.5$)}
+\label{tab:robustness_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Model} & \textbf{Astute Accuracy} & \textbf{Robust Accuracy} & \textbf{Robustness Ratio} \\
+\midrule
+Linear SVM & 89.82\% & 3.47\% & 3.86\% \\
+Gradient Boosting & 94.45\% & 43.45\% & 46.00\% \\
+\textbf{Random Forest} & \textbf{94.33\%} & \textbf{56.73\%} & \textbf{60.14\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/model_robustness.png}
+\caption{Adversarial robustness comparison across models}
+\label{fig:model_robustness}
+\end{figure}
+
+\subsection{Robustness Analysis}
+
+The results reveal several important findings:
+\begin{itemize}
+    \item Linear models are highly vulnerable to gradient-based attacks, with accuracy dropping to 3.47\% under moderate perturbation
+    \item Ensemble methods demonstrate better robustness due to their non-linear, aggregated decision boundaries
+    \item Random Forest exhibits the highest robustness ratio (60.14\%), retaining more than half of its astute accuracy under attack
+    \item Even robust models experience significant accuracy degradation, highlighting the need for adversarial defenses
+\end{itemize}
+
+%==============================================================================
+\section{Results Summary}
+%==============================================================================
+
+\subsection{Overall Performance}
+
+\begin{table}[H]
+\centering
+\caption{Best Models by Task}
+\label{tab:best_models}
+\begin{tabular}{lll}
+\toprule
+\textbf{Task} & \textbf{Best Model} & \textbf{Key Metric} \\
+\midrule
+Zero-day Detection & Local Outlier Factor & F1 = 0.843 \\
+Attack Classification & Gradient Boosting & F1 = 0.925 \\
+Adversarial Robustness & Random Forest & 60.1\% robust accuracy \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Metric Selection Guidelines}
+
+\begin{table}[H]
+\centering
+\caption{Metric Selection Guidelines}
+\label{tab:metric_guidelines}
+\begin{tabular}{p{3cm}p{5cm}p{5cm}}
+\toprule
+\textbf{Metric} & \textbf{When to Use} & \textbf{Interpretation} \\
+\midrule
+Precision & When false alarms are costly & Higher = fewer false positives \\
+Recall & When missing attacks is critical & Higher = fewer missed attacks \\
+F1-Score & Balanced performance assessment & Harmonic mean of precision/recall \\
+AUPRC & Imbalanced datasets & Area under precision-recall curve \\
+MCC & Overall quality metric & Balanced measure for binary classification \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Security Implications}
+%==============================================================================
+
+\subsection{Attack Pattern Insights}
+
+The analysis reveals several important security observations:
+\begin{itemize}
+    \item Reconnaissance dominates (37.23\% of attacks), suggesting attackers frequently probe systems before launching targeted attacks
+    \item DoS and DDoS attacks account for 40.36\% of attacks combined, highlighting the need for rate limiting and traffic analysis
+    \item TCP MSS values are highly discriminative, indicating that attack tools often use non-standard network parameters
+    \item Protocol diversity metrics indicate attack complexity and can distinguish between simple and sophisticated threats
+\end{itemize}
+
+\subsection{Multi-Layer Defense Strategy}
+
+Based on the evaluation results, a multi-layer defense strategy is recommended:
+\begin{enumerate}
+    \item \textbf{Layer 1 - Anomaly Detection:} Deploy LOF or Isolation Forest for zero-day attack early warning with low computational overhead
+    \item \textbf{Layer 2 - Classification:} Use Random Forest or Gradient Boosting to categorize known attack types with high precision for alert prioritization
+    \item \textbf{Layer 3 - Adversarial Defense:} Implement input validation, ensemble voting, and regular model retraining to mitigate adversarial threats
+\end{enumerate}
+
+\subsection{Operational Deployment Considerations}
+
+\begin{table}[H]
+\centering
+\caption{Operational Deployment Recommendations}
+\label{tab:deployment}
+\begin{tabular}{ll}
+\toprule
+\textbf{Aspect} & \textbf{Recommendation} \\
+\midrule
+Model Selection & Random Forest for best robustness \\
+Update Frequency & Weekly retraining with new data \\
+Threshold Tuning & Adjust based on false alarm tolerance \\
+Feature Monitoring & Track feature drift for model degradation \\
+Fallback Strategy & Anomaly detection when classifier uncertain \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Conclusions and Recommendations}
+%==============================================================================
+
+\subsection{Summary of Findings}
+
+This analysis of the CIC-IIoT-2025 dataset demonstrates that machine learning methods can effectively detect and classify cyber attacks in IIoT environments:
+
+\begin{enumerate}
+    \item \textbf{Anomaly Detection:} Local Outlier Factor achieves the best balance (F1=0.843, MCC=0.704) for detecting unknown attack patterns without requiring labeled attack data
+    \item \textbf{Classification:} Gradient Boosting provides the highest accuracy (F1=0.925, MCC=0.885) for categorizing known attacks with very high precision (99.1\%)
+    \item \textbf{Adversarial Robustness:} Random Forest demonstrates the best resilience (60.14\% robust accuracy retention) against gradient-based adversarial attacks
+    \item \textbf{Feature Engineering:} Network MSS, protocol counts, and timing features are the most discriminative for distinguishing attack from benign traffic
+\end{enumerate}
+
+\subsection{Recommendations}
+
+For immediate deployment:
+\begin{itemize}
+    \item Deploy Random Forest as the primary detection model for its balance of accuracy and robustness
+    \item Implement LOF as a complementary zero-day detection layer
+    \item Establish feature monitoring for detecting concept drift and model degradation
+\end{itemize}
+
+For enhanced security:
+\begin{itemize}
+    \item Implement adversarial training to improve model robustness
+    \item Develop ensemble voting across multiple models to increase confidence
+    \item Create feedback mechanisms for continuous learning from new threats
+\end{itemize}
+
+For future research:
+\begin{itemize}
+    \item Investigate deep learning approaches (LSTM, CNN) for temporal pattern recognition
+    \item Explore federated learning for distributed IIoT environments with privacy constraints
+    \item Develop attack-specific detection models for improved granularity
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+    \item The dataset may not capture all emerging attack types and techniques
+    \item Feature extraction assumes packet-level network visibility
+    \item Adversarial robustness was tested only with FGSM; other attack methods may yield different results
+    \item Computational requirements may limit real-time deployment for some algorithms
+\end{itemize}
+
+%==============================================================================
+\section*{References}
+%==============================================================================
+
+\begin{enumerate}
+    \item Sharafaldin, I., Lashkari, A. H., \& Ghorbani, A. A. (2018). Toward generating a new intrusion detection dataset and intrusion traffic characterization. \textit{ICISSP}.
+    \item Liu, F. T., Ting, K. M., \& Zhou, Z. H. (2008). Isolation forest. \textit{IEEE International Conference on Data Mining}.
+    \item Breunig, M. M., Kriegel, H. P., Ng, R. T., \& Sander, J. (2000). LOF: identifying density-based local outliers. \textit{ACM SIGMOD}.
+    \item Goodfellow, I. J., Shlens, J., \& Szegedy, C. (2015). Explaining and harnessing adversarial examples. \textit{ICLR}.
+    \item Breiman, L. (2001). Random forests. \textit{Machine Learning}, 45(1), 5-32.
+    \item Friedman, J. H. (2001). Greedy function approximation: a gradient boosting machine. \textit{Annals of Statistics}, 29(5), 1189-1232.
+\end{enumerate}
+
+%==============================================================================
+\appendix
+\section{Complete Metrics Tables}
+%==============================================================================
+
+\subsection{Anomaly Detection Results}
+
+\begin{table}[H]
+\centering
+\caption{Complete Anomaly Detection Results}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Precision} & \textbf{Recall} & \textbf{F1-Score} & \textbf{Bal. Acc.} & \textbf{MCC} \\
+\midrule
+Isolation Forest & 0.8830 & 0.7758 & 0.8259 & 0.8365 & 0.6780 \\
+One-Class SVM & 0.5847 & 0.8476 & 0.6920 & 0.6228 & 0.2750 \\
+Local Outlier Factor & 0.8870 & 0.8034 & 0.8431 & 0.8505 & 0.7041 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Classification Results}
+
+\begin{table}[H]
+\centering
+\caption{Complete Classification Results}
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Model} & \textbf{Prec.} & \textbf{Recall} & \textbf{F1} & \textbf{Bal. Acc.} & \textbf{MCC} & \textbf{AUPRC} & \textbf{AUC-ROC} \\
+\midrule
+Random Forest & 0.9915 & 0.8627 & 0.9226 & 0.9289 & 0.8825 & 0.9438 & 0.9582 \\
+Gradient Boosting & 0.9911 & 0.8663 & 0.9245 & 0.9306 & 0.8851 & 0.9436 & 0.9587 \\
+SVM (RBF) & 0.9629 & 0.7970 & 0.8721 & 0.8881 & 0.8074 & 0.9238 & 0.9325 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Adversarial Robustness Results}
+
+\begin{table}[H]
+\centering
+\caption{Complete Adversarial Robustness Results ($\epsilon=0.5$)}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Model} & \textbf{Astute Accuracy} & \textbf{Robust Accuracy} & \textbf{Robustness Ratio} \\
+\midrule
+Linear SVM & 89.82\% & 3.47\% & 3.86\% \\
+Random Forest & 94.33\% & 56.73\% & 60.14\% \\
+Gradient Boosting & 94.45\% & 43.45\% & 46.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}
