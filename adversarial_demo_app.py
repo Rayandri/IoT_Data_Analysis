@@ -12,6 +12,7 @@ Authors: CIC-IIoT-2025 Security Analysis Project
 
 import streamlit as st
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
@@ -22,12 +23,18 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC, LinearSVC
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.neighbors import LocalOutlierFactor
+from sklearn.decomposition import PCA
+from sklearn.feature_selection import SelectKBest, f_classif
 import tempfile
 import os
 import subprocess
 import shutil
 import warnings
 warnings.filterwarnings('ignore')
+
+# Data paths for real CIC-IIoT dataset
+ATTACK_PATH = 'data/attack_data/'
+BENIGN_PATH = 'data/benign_data/'
 
 # Page configuration
 st.set_page_config(
@@ -77,6 +84,99 @@ st.markdown("""
 
 
 @st.cache_data
+def load_real_data(time_interval='1sec', n_samples=500, reduction_method='pca'):
+    """Load real CIC-IIoT dataset and reduce to 2D for visualization.
+    
+    Parameters:
+    -----------
+    time_interval : str
+        Time interval for data sampling (1sec, 2sec, etc.)
+    n_samples : int
+        Number of samples to use (balanced between attack and benign)
+    reduction_method : str
+        Method for dimensionality reduction ('pca' or 'feature_selection')
+    
+    Returns:
+    --------
+    X : ndarray (n_samples, 2)
+        2D feature matrix for visualization
+    y : ndarray (n_samples,)
+        Binary labels (0=benign, 1=attack)
+    scaler : StandardScaler
+        Fitted scaler for transformations
+    feature_names : list
+        Names of the 2 selected features (for labels)
+    """
+    # Load data
+    attack_file = f'{ATTACK_PATH}attack_samples_{time_interval}.csv'
+    benign_file = f'{BENIGN_PATH}benign_samples_{time_interval}.csv'
+    
+    df_attack = pd.read_csv(attack_file)
+    df_benign = pd.read_csv(benign_file)
+    
+    df_attack['is_attack'] = 1
+    df_benign['is_attack'] = 0
+    
+    # Balance the dataset
+    samples_per_class = min(n_samples // 2, len(df_attack), len(df_benign))
+    df_attack_sampled = df_attack.sample(n=samples_per_class, random_state=42)
+    df_benign_sampled = df_benign.sample(n=samples_per_class, random_state=42)
+    
+    df = pd.concat([df_attack_sampled, df_benign_sampled], ignore_index=True)
+    
+    # Identify metadata columns to exclude
+    metadata_cols = ['device_name', 'device_mac', 'label_full', 'label1', 'label2', 'label3', 'label4',
+                     'timestamp', 'timestamp_start', 'timestamp_end', 'is_attack']
+    
+    # Get feature columns (numerical only)
+    feature_cols = [col for col in df.columns if col not in metadata_cols]
+    
+    # Remove columns that are lists/arrays stored as strings
+    def is_list_column(col):
+        sample = df[col].dropna().iloc[0] if len(df[col].dropna()) > 0 else None
+        if isinstance(sample, str) and sample.startswith('['):
+            return True
+        return False
+    
+    list_cols = [col for col in feature_cols if is_list_column(col)]
+    feature_cols = [col for col in feature_cols if col not in list_cols]
+    
+    # Prepare feature matrix and target
+    X = df[feature_cols].copy()
+    y = df['is_attack'].values
+    
+    # Handle missing values
+    X = X.fillna(X.median())
+    
+    # Remove any remaining non-numeric columns
+    X = X.select_dtypes(include=[np.number])
+    feature_cols = X.columns.tolist()
+    
+    # Scale features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Reduce to 2D
+    if reduction_method == 'pca':
+        reducer = PCA(n_components=2, random_state=42)
+        X_2d = reducer.fit_transform(X_scaled)
+        feature_names = ['PC1 (Principal Component 1)', 'PC2 (Principal Component 2)']
+    else:
+        # Feature selection: select top 2 most discriminative features
+        selector = SelectKBest(f_classif, k=2)
+        X_2d = selector.fit_transform(X_scaled, y)
+        selected_indices = selector.get_support(indices=True)
+        feature_names = [feature_cols[i].replace('network_', '').replace('_', ' ').title() 
+                        for i in selected_indices]
+    
+    # Re-scale the 2D features
+    scaler_2d = StandardScaler()
+    X_2d = scaler_2d.fit_transform(X_2d)
+    
+    return X_2d, y, scaler_2d, feature_names
+
+
+@st.cache_data
 def generate_data(n_samples=500, dataset_type='classification'):
     """Generate synthetic data for demonstration."""
     if dataset_type == 'moons':
@@ -95,7 +195,7 @@ def generate_data(n_samples=500, dataset_type='classification'):
     
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
-    return X, y, scaler
+    return X, y, scaler, ['Feature 1', 'Feature 2']
 
 
 def get_model(model_name, random_state=42):
@@ -195,8 +295,11 @@ def apply_defense(X, defense_type, model=None):
 
 def create_fgsm_frame(model, X_train, X_test, y_test, X_current, y_pred_current, 
                       xx, yy, Z, epsilon, t, clean_acc, adv_acc, accuracies_so_far, 
-                      epsilons_so_far, defense):
+                      epsilons_so_far, defense, feature_names=None):
     """Create a single frame for FGSM simulation."""
+    if feature_names is None:
+        feature_names = ['Feature 1', 'Feature 2']
+    
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     
     # Left plot: Decision boundary with points
@@ -224,8 +327,8 @@ def create_fgsm_frame(model, X_train, X_test, y_test, X_current, y_pred_current,
     current_acc = (y_pred_current == y_test).mean()
     ax1.set_title(f'FGSM Attack (ε={epsilon:.2f}) - {int(t*100)}% Applied\n'
                   f'Current Accuracy: {current_acc:.1%}', fontsize=12, fontweight='bold')
-    ax1.set_xlabel('Feature 1', fontsize=10)
-    ax1.set_ylabel('Feature 2', fontsize=10)
+    ax1.set_xlabel(feature_names[0], fontsize=10)
+    ax1.set_ylabel(feature_names[1], fontsize=10)
     
     # Defense indicator
     if defense != 'None':
@@ -256,8 +359,12 @@ def create_fgsm_frame(model, X_train, X_test, y_test, X_current, y_pred_current,
 
 
 def create_poisoning_frame(X_poisoned, y_poisoned, poison_idx, X_test, y_test,
-                           xx, yy, Z, poison_rate, accuracies, rates_so_far, baseline_acc):
+                           xx, yy, Z, poison_rate, accuracies, rates_so_far, baseline_acc,
+                           feature_names=None):
     """Create a single frame for poisoning simulation."""
+    if feature_names is None:
+        feature_names = ['Feature 1', 'Feature 2']
+    
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     
     # Left plot: Decision boundary with poisoned points
@@ -283,8 +390,8 @@ def create_poisoning_frame(X_poisoned, y_poisoned, poison_idx, X_test, y_test,
     current_acc = accuracies[-1] if accuracies else baseline_acc
     ax1.set_title(f'Causative Attack - Poison Rate: {poison_rate:.1%}\n'
                   f'Accuracy: {current_acc:.1%}', fontsize=12, fontweight='bold')
-    ax1.set_xlabel('Feature 1', fontsize=10)
-    ax1.set_ylabel('Feature 2', fontsize=10)
+    ax1.set_xlabel(feature_names[0], fontsize=10)
+    ax1.set_ylabel(feature_names[1], fontsize=10)
     if len(poison_idx) > 0:
         ax1.legend(loc='upper right', fontsize=9)
     
@@ -311,8 +418,10 @@ def create_poisoning_frame(X_poisoned, y_poisoned, poison_idx, X_test, y_test,
 
 
 def generate_fgsm_video(model, X_train, y_train, X_test, y_test, epsilon, defense, 
-                        n_frames, fps, progress_callback):
+                        n_frames, fps, progress_callback, feature_names=None):
     """Generate video frames for FGSM attack simulation."""
+    if feature_names is None:
+        feature_names = ['Feature 1', 'Feature 2']
     
     # Train model
     model.fit(X_train, y_train)
@@ -359,7 +468,7 @@ def generate_fgsm_video(model, X_train, y_train, X_test, y_test, epsilon, defens
         fig = create_fgsm_frame(
             model, X_train, X_test, y_test, X_current, y_pred_current,
             xx, yy, Z, epsilon, t, clean_acc, adv_acc,
-            accuracies_so_far.copy(), epsilons_so_far.copy(), defense
+            accuracies_so_far.copy(), epsilons_so_far.copy(), defense, feature_names
         )
         
         # Save frame
@@ -409,8 +518,10 @@ def generate_fgsm_video(model, X_train, y_train, X_test, y_test, epsilon, defens
 
 
 def generate_poisoning_video(model_name, X_train, y_train, X_test, y_test, poison_rate,
-                             n_frames, fps, progress_callback):
+                             n_frames, fps, progress_callback, feature_names=None):
     """Generate video frames for poisoning attack simulation."""
+    if feature_names is None:
+        feature_names = ['Feature 1', 'Feature 2']
     
     poison_rates = np.linspace(0, poison_rate, n_frames + 1)
     
@@ -445,7 +556,8 @@ def generate_poisoning_video(model_name, X_train, y_train, X_test, y_test, poiso
         # Create frame
         fig = create_poisoning_frame(
             X_poisoned, y_poisoned, poison_idx, X_test, y_test,
-            xx, yy, Z, rate, accuracies.copy(), rates_so_far.copy(), baseline_acc
+            xx, yy, Z, rate, accuracies.copy(), rates_so_far.copy(), baseline_acc,
+            feature_names
         )
         
         # Save frame
@@ -502,36 +614,71 @@ def cleanup_temp_dir(temp_dir):
 
 def main():
     # Header
-    st.markdown('<p class="main-header">Adversarial Machine Learning Demo</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Interactive Simulation of Exploratory and Causative Attacks</p>', 
+    st.markdown('<p class="main-header">🛡️ Adversarial Machine Learning Demo</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Interactive Simulation of Exploratory and Causative Attacks on IoT Security</p>', 
                 unsafe_allow_html=True)
     
     # Sidebar configuration
-    st.sidebar.header("Configuration")
+    st.sidebar.header("🔧 Configuration")
+    
+    # Dataset selection - NEW: Real data vs Synthetic
+    st.sidebar.subheader("📊 Dataset")
+    
+    data_source = st.sidebar.radio(
+        "Data Source",
+        ["Real IoT Data (CIC-IIoT)", "Synthetic Data"],
+        help="Choose between real CIC-IIoT-2025 dataset or synthetic data for demonstration."
+    )
+    
+    if data_source == "Real IoT Data (CIC-IIoT)":
+        time_interval = st.sidebar.selectbox(
+            "Time Interval",
+            ["1sec", "2sec", "3sec", "4sec", "5sec"],
+            help="Sampling interval for network traffic aggregation."
+        )
+        
+        reduction_method = st.sidebar.selectbox(
+            "Feature Reduction",
+            ["pca", "feature_selection"],
+            format_func=lambda x: "PCA (Principal Components)" if x == "pca" else "Top 2 Discriminative Features",
+            help="Method to reduce features to 2D for visualization."
+        )
+        
+        n_samples = st.sidebar.slider(
+            "Dataset Size",
+            min_value=200, max_value=2000, value=500, step=100,
+            help="Number of samples (balanced between attack and benign)"
+        )
+    else:
+        dataset_type = st.sidebar.selectbox(
+            "Synthetic Dataset Type",
+            ["classification", "moons"],
+            format_func=lambda x: "Linear Separable" if x == "classification" else "Non-Linear (Moons)"
+        )
+        
+        n_samples = st.sidebar.slider(
+            "Dataset Size",
+            min_value=200, max_value=1000, value=500, step=100
+        )
+    
+    st.sidebar.markdown("---")
     
     # Attack type selection
     attack_type = st.sidebar.selectbox(
-        "Attack Type",
+        "⚔️ Attack Type",
         ["Exploratory (FGSM)", "Causative (Data Poisoning)"],
         help="Exploratory attacks perturb test samples. Causative attacks poison training data."
     )
     
     # Model selection
     model_name = st.sidebar.selectbox(
-        "Detection Model",
+        "🤖 Detection Model",
         ["Logistic Regression", "Linear SVM", "SVM (RBF)", "Random Forest", "Gradient Boosting"],
         index=0
     )
     
-    # Dataset selection
-    dataset_type = st.sidebar.selectbox(
-        "Dataset",
-        ["classification", "moons"],
-        format_func=lambda x: "Linear Separable" if x == "classification" else "Non-Linear (Moons)"
-    )
-    
     st.sidebar.markdown("---")
-    st.sidebar.header("Attack Parameters")
+    st.sidebar.header("⚙️ Attack Parameters")
     
     if attack_type == "Exploratory (FGSM)":
         epsilon = st.sidebar.slider(
@@ -541,7 +688,7 @@ def main():
         )
         
         st.sidebar.markdown("---")
-        st.sidebar.header("Defense Mechanisms")
+        st.sidebar.header("🛡️ Defense Mechanisms")
         
         defense = st.sidebar.selectbox(
             "Active Defense",
@@ -558,7 +705,7 @@ def main():
         defense = "None"
     
     st.sidebar.markdown("---")
-    st.sidebar.header("Video Settings")
+    st.sidebar.header("🎬 Video Settings")
     
     n_frames = st.sidebar.slider(
         "Number of Frames",
@@ -572,27 +719,51 @@ def main():
         help="Frames per second for video playback"
     )
     
-    n_samples = st.sidebar.slider(
-        "Dataset Size",
-        min_value=200, max_value=1000, value=500, step=100
-    )
+    # Load data based on selection
+    try:
+        if data_source == "Real IoT Data (CIC-IIoT)":
+            X, y, scaler, feature_names = load_real_data(time_interval, n_samples, reduction_method)
+            data_description = f"CIC-IIoT-2025 ({time_interval})"
+        else:
+            X, y, scaler, feature_names = generate_data(n_samples, dataset_type)
+            data_description = f"Synthetic ({dataset_type})"
+    except Exception as e:
+        st.error(f"Error loading data: {str(e)}")
+        st.info("Make sure the data files are in the correct location (data/attack_data/ and data/benign_data/)")
+        return
     
-    # Generate data
-    X, y, scaler = generate_data(n_samples, dataset_type)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
     
     # Main content area
     st.markdown("---")
     
+    # Show a banner when using real data
+    if data_source == "Real IoT Data (CIC-IIoT)":
+        st.markdown("""
+        <div style='padding: 1rem; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
+                    color: white; border-radius: 10px; margin-bottom: 1rem; text-align: center;'>
+            <strong>🌐 Using Real CIC-IIoT-2025 Dataset</strong><br>
+            <small>Network traffic data from actual IoT devices - demonstrating real-world attack impact</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
     # Info boxes
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.info(f"""
-        **Model:** {model_name}  
-        **Attack:** {attack_type}  
-        **Dataset:** {n_samples} samples
-        """)
+        if data_source == "Real IoT Data (CIC-IIoT)":
+            st.info(f"""
+            **Data:** Real CIC-IIoT-2025  
+            **Model:** {model_name}  
+            **Samples:** {len(X):,}  
+            **Features:** {feature_names[0][:20]}...
+            """)
+        else:
+            st.info(f"""
+            **Data:** {data_description}  
+            **Model:** {model_name}  
+            **Samples:** {n_samples}
+            """)
     
     with col2:
         if attack_type == "Exploratory (FGSM)":
@@ -652,11 +823,12 @@ def main():
             model = get_model(model_name)
             video_path, clean_acc, adv_acc, temp_dir = generate_fgsm_video(
                 model, X_train, y_train, X_test, y_test,
-                epsilon, defense, n_frames, fps, update_progress
+                epsilon, defense, n_frames, fps, update_progress, feature_names
             )
         else:
             video_path, baseline_acc, poisoned_acc, temp_dir = generate_poisoning_video(
                 model_name, X_train, y_train, X_test, y_test,
+                poison_rate, n_frames, fps, update_progress, feature_names,
                 poison_rate, n_frames, fps, update_progress
             )
             clean_acc = baseline_acc
@@ -774,7 +946,7 @@ def main():
                 """)
     
     # Educational content
-    with st.expander("Learn More About Adversarial ML"):
+    with st.expander("📚 Learn More About Adversarial ML"):
         st.markdown("""
         ### Attack Taxonomy
         
@@ -803,6 +975,33 @@ def main():
         3. **Ensemble Methods**: Combine multiple models for robustness
         4. **Feature Squeezing**: Reduce input precision to remove perturbations
         5. **Data Sanitization**: Validate and clean training data
+        """)
+    
+    with st.expander("📊 About the CIC-IIoT-2025 Dataset"):
+        st.markdown("""
+        ### Real-World IoT Network Traffic Data
+        
+        The CIC-IIoT-2025 dataset contains **real network traffic** collected from IoT devices,
+        including both benign traffic and various attack types.
+        
+        **Data Characteristics:**
+        - Aggregated at configurable time intervals (1-10 seconds)
+        - 60+ network features including packet counts, sizes, timing, TCP flags, etc.
+        - Multiple attack categories: DDoS, DoS, reconnaissance, and more
+        
+        **Feature Categories:**
+        - **Network Packets**: Count, size, header information
+        - **TCP Flags**: SYN, ACK, FIN, RST distributions
+        - **Timing**: Inter-packet delays, flow duration
+        - **IP Information**: Source/destination diversity, TTL values
+        
+        **Visualization Approach:**
+        - For 2D visualization, we reduce the ~60 features to 2 dimensions
+        - **PCA**: Preserves maximum variance in the data
+        - **Feature Selection**: Uses the 2 most discriminative features
+        
+        Using real data demonstrates how adversarial attacks would affect **actual IoT security systems**,
+        making the security recommendations more applicable to real-world deployments.
         """)
     
     # Footer
