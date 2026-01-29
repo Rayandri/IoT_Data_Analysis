@@ -14,6 +14,7 @@ interface SlideContainerProps {
 export default function SlideContainer({ children, slideNumber }: SlideContainerProps) {
   const router = useRouter();
   const [scale, setScale] = useState(1);
+  const [marginTop, setMarginTop] = useState(0);
   const [isWarping, setIsWarping] = useState(false);
   const currentSlide = SLIDES.find(s => s.id === slideNumber);
 
@@ -22,7 +23,9 @@ export default function SlideContainer({ children, slideNumber }: SlideContainer
     const targetHeight = 1080;
     const widthScale = window.innerWidth / targetWidth;
     const heightScale = window.innerHeight / targetHeight;
-    setScale(Math.min(widthScale, heightScale));
+    const newScale = Math.min(widthScale, heightScale);
+    setScale(newScale);
+    setMarginTop(Math.max(0, (window.innerHeight - 1080 * newScale) / 2));
   }, []);
 
   const navigate = useCallback(
@@ -93,7 +96,7 @@ export default function SlideContainer({ children, slideNumber }: SlideContainer
           width: "1920px",
           height: "1080px",
           flexShrink: 0,
-          marginTop: `${Math.max(0, (window.innerHeight - 1080 * scale) / 2)}px`
+          marginTop: `${marginTop}px`
         }}
         className={`relative z-10 overflow-hidden flex flex-col ${isWarping ? "chromatic-aberration" : ""}`}
       >
